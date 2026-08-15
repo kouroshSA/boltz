@@ -1,20 +1,31 @@
 # Quick-start — running Boltz-2 predictions (this fork)
 
 Practical directions for our local setup: single-protein structure prediction and
-protein–protein (multimer) interaction prediction. Verified on this box (2× RTX 3090).
+protein–protein (multimer) interaction prediction. Verified on two boxes:
+**workstation** (2× RTX 3090) and **DGX Spark** (1× GB10, aarch64, CUDA 13).
 
-## 0. One-time setup (already done on this machine)
+## 0. One-time setup (already done on both machines)
 
 - Repo: `/home/ksa/Models/boltz` (this fork, `kouroshSA/boltz`)
 - Conda env: **`boltz`** (Python 3.12, torch 2.13 + CUDA)
 - Weight cache: **`/home/ksa/Models/boltz_cache`** (~8 GB: `boltz2_conf.ckpt`, `boltz2_aff.ckpt`, `mols/`)
 
-Activate the env and point Boltz at the cache (otherwise it re-downloads ~6 GB to `~/.boltz`):
+Activate the env — `BOLTZ_CACHE` is already exported in `~/.bashrc` and set on the conda env, so
+`--cache` is optional. If you are on a fresh machine, set it before the first run or Boltz
+re-downloads ~6 GB to `~/.boltz`:
 
 ```bash
 conda activate boltz                      # or use /home/ksa/anaconda3/envs/boltz/bin/boltz
 export BOLTZ_CACHE=/home/ksa/Models/boltz_cache
 ```
+
+### DGX Spark (GB10) specifics
+
+- The env there is built from **conda-forge** with **cu130** torch and the **`cuequivariance_*_cu13`**
+  wheels — *not* `pip install -e ".[cuda]"`, whose cu12 pins don't pair with a CUDA-13 torch.
+  See `claude.code.instructions.md` §1a.
+- **Pass `--num_workers 0` to every `boltz predict` on that box** — see §5.
+- One GPU: `--devices 2` does not apply there.
 
 > Keep prediction outputs **out of the repo** — write to `--out_dir /home/ksa/Models/boltz_runs/...`.
 > Never place the run log inside the input directory (Boltz tries to parse every file in it).
@@ -84,9 +95,20 @@ boltz predict /home/ksa/Models/boltz_runs/batch/inputs \
 | `--recycling_steps N` | 3 | More = slightly better, slower. |
 | `--sampling_steps N` | 200 | Diffusion steps. |
 | `--use_msa_server` | off | Generate MSAs via ColabFold server. Omit if providing your own MSA (`.a3m` in the header). |
+| `--num_workers N` | 2 | **Use `0` on the DGX Spark** — the forked dataloader workers hang there (see below). |
 | `--out_dir PATH` | ./ | Write **outside the repo** (`/home/ksa/Models/boltz_runs/...`). |
 | `--cache PATH` | `~/.boltz` | Point at `/home/ksa/Models/boltz_cache`. |
 | `--override` | off | Recompute even if outputs exist. |
+
+### Run hangs at `Predicting:`?
+
+If a run sits at `Predicting: | 0/? [00:00<?, ?it/s]` — GPU memory allocated but ~0% utilisation and
+no CPU time — the dataloader workers are stuck. Kill it and rerun with **`--num_workers 0`**.
+Reproduced on the DGX Spark: default workers produced no batch in 15 min and then failed with
+`DataLoader worker (pid(s) ...) exited unexpectedly`; with `--num_workers 0` the same 36-residue
+monomer completed in ~6 s (pLDDT 0.955, pTM 0.816). Boltz loads one sample per job, so this costs
+nothing. Tip: pipe runs to a log (`> run.log 2>&1`) — output is buffered, so a piped `tail` shows
+nothing while the job is alive.
 
 ## 6. Outputs & key metrics
 

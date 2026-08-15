@@ -24,6 +24,30 @@ boltz predict --help | head
 NOTE: the conda env is **not** portable (compiled CUDA wheels) — it must be installed on each machine.
 Only the weight cache (below) is copyable.
 
+### 1a. Blackwell / CUDA-13 boxes (e.g. DGX Spark GB10, sm_121) — do NOT use `[cuda]`
+
+The `[cuda]` extra pins `cuequivariance_ops_cu12*`, i.e. CUDA-12 wheels. On a Blackwell GPU whose
+driver stack is CUDA 13 they will not pair with a cu130 torch. Install torch and the equivariance
+ops from the CUDA-13 channels instead:
+
+```bash
+conda create -n boltz -c conda-forge --override-channels python=3.12 -y   # conda-forge avoids the
+conda activate boltz                                                      # Anaconda-channel ToS/licence
+pip install torch --index-url https://download.pytorch.org/whl/cu130
+pip install -e .                                                          # base deps, no [cuda] extra
+pip install "cuequivariance_ops_cu13>=0.5.0" "cuequivariance_ops_torch_cu13>=0.5.0" \
+            "cuequivariance_torch>=0.5.0"
+
+# sanity: the triangle kernel must actually run, not just import
+python -c "
+import torch; from cuequivariance_torch.primitives.triangle import triangle_multiplicative_update
+x=torch.randn(1,32,32,64,device='cuda',dtype=torch.bfloat16); m=torch.ones(1,32,32,device='cuda',dtype=torch.bool)
+print('kernel ok', triangle_multiplicative_update(x, direction='outgoing', mask=m).shape)"
+```
+Verified on a DGX Spark (GB10, aarch64): torch 2.13.0+cu130, cuequivariance 0.11.1.
+On aarch64 always take `linux-aarch64`/`arm64` builds. If the kernels cannot be made to work at all,
+`boltz predict --no_kernels` falls back to the pure-torch path (slower).
+
 ## 2. Locate / verify the weight cache BEFORE downloading
 
 Boltz keeps ~8 GB of model/data files in a cache dir (default `~/.boltz`). It **only downloads a file if
@@ -45,7 +69,14 @@ ls -lh "$CACHE"
   (`rsync -aP user@host:/path/to/boltz_cache/ "$CACHE"/`), or let the first `boltz predict` download the
   missing files into `$BOLTZ_CACHE` (needs internet; ~6 GB).
 - **Always set `BOLTZ_CACHE`** (or `--cache`) to the intended folder, otherwise Boltz uses `~/.boltz`
-  and may re-download.
+  and may re-download. Make it stick, so no future run silently re-downloads:
+  ```bash
+  echo 'export BOLTZ_CACHE=/path/to/boltz_cache' >> ~/.bashrc      # every new shell
+  conda activate boltz && conda env config vars set BOLTZ_CACHE=/path/to/boltz_cache
+  ```
+  The second form also covers shells that never source `.bashrc` (cron, non-interactive, IDE
+  terminals). `get_cache_path()` in `src/boltz/main.py` reads `$BOLTZ_CACHE` as the default for
+  `--cache`. To confirm a run downloaded nothing: no `Downloading` lines in its log, and no `~/.boltz`.
 
 ## 3. Basic usage
 
@@ -67,10 +98,17 @@ boltz predict complex.fasta --use_msa_server --diffusion_samples 5 --out_dir OUT
 boltz predict inputs --use_msa_server --devices 2 --diffusion_samples 5 \
       --max_parallel_samples 1 --out_dir OUT --cache "$BOLTZ_CACHE"
 ```
-Notes: `--devices 2` only helps with ≥2 inputs (one complex per GPU); a single complex can't be split.
+Notes: `--devices N` only helps with ≥2 inputs (one complex per GPU) and N ≤ the number of GPUs on
+*this* machine (a DGX Spark has one) — a single complex can't be split.
 `--max_parallel_samples 1` folds samples one at a time — use it for large complexes to avoid GPU OOM.
 `--use_msa_server` sends sequences to the public ColabFold server; omit it and supply your own `.a3m`
 (via the header MSA field) for a fully local/offline run.
+
+**If a run stalls at `Predicting: | 0/? [00:00<?, ?it/s]` with the GPU idle, add `--num_workers 0`.**
+The forked dataloader workers do not survive on every box — on the DGX Spark they hang and torch
+eventually raises `DataLoader worker (pid(s) ...) exited unexpectedly`. Boltz loads one sample per
+job, so 0 workers costs nothing (a 36-residue monomer folds in ~6 s either way). Symptom to watch
+for: the process holds GPU memory but shows ~0% GPU utilisation and near-zero CPU time.
 
 Outputs land in `OUT/boltz_results_<name>/predictions/<name>/`:
 `<name>_model_0..N.cif` (structures, best first) and `confidence_<name>_model_i.json`
