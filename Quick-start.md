@@ -145,3 +145,19 @@ python tools/boltz_to_af3_summary.py <boltz_out_dir> [more_dirs...] -o summary.c
   ≤0.60 Weak, ≤0.80 Moderate, else Strong.
 - ipTM/pTM map exactly to AF3; pLDDT is scaled to 0–100; Ranking = Boltz `confidence_score`
   (AF3 `ranking_score` analog); PAE = mean of the Boltz PAE matrix (may differ from AF3's PAE def).
+
+## 8. Pipelined runner for large jobs (overlap MSA + folding)
+
+Plain `boltz predict <dir> --devices 2` generates ALL MSAs first (GPUs idle), then folds everything, so
+no output appears until every MSA is done. For large sets use the pipelined runner, which drives one
+async single-GPU stream per GPU over small chunks — while one stream folds, the other fetches MSAs, so
+the phases overlap, GPUs stay busy, and output is written continuously. Resumable (skips done pairs).
+
+```bash
+python tools/boltz_pipeline_run.py --inputs <dir> --out <dir> --cache "$BOLTZ_CACHE" \
+       --gpus 0,1 --chunk 16 --diffusion-samples 5 --max-parallel-samples 1
+```
+Output uses the normal Boltz layout (under boltz_results_<chunk>/predictions/<name>/), so
+`tools/boltz_to_af3_summary.py <out_dir> ...` consumes it unchanged. Use `--no-msa-server` if the
+FASTAs carry their own MSA paths (fully local). Two streams query the public MSA server concurrently —
+fine for moderate loads; for very large jobs prefer precomputed MSAs.
