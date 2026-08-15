@@ -7,28 +7,49 @@ user may have copied the `boltz_cache` folder to this machine — find and verif
 
 ## 1. Install
 
+### 1.0 Identify the machine first
+
+The install differs only in *which CUDA build* of torch and the equivariance kernels you take.
+Two facts decide it — check them before typing anything else:
+
 ```bash
-# clone this fork (origin = the working version; upstream = jwohlwend/boltz)
+uname -m                                   # x86_64 (Intel/AMD) | aarch64 (Grace, GH200, DGX Spark)
+nvidia-smi --query-gpu=name,compute_cap --format=csv    # GPU model + compute capability
+nvidia-smi | head -3                       # "CUDA Version: 12.x" or "13.0" = the driver's max CUDA
+```
+
+| Machine | Path |
+|---|---|
+| x86_64 Linux, NVIDIA GPU, driver CUDA **12.x** (most Intel/AMD workstations & servers: RTX 30xx/40xx, A100, L40S, H100) | **§1a** — the standard `[cuda]` extra |
+| Any arch, driver CUDA **13.x** and/or Blackwell GPU (compute cap 10.x/12.x: RTX 50xx, B200, GB10) | **§1b** — cu130 torch + `cu13` kernels |
+| aarch64 (DGX Spark GB10, GH200) | **§1b**, and always take `linux-aarch64`/`arm64` wheels |
+
+The driver's CUDA version is a **ceiling**: a CUDA-12 build runs fine on a CUDA-13 driver, but not
+the reverse. Blackwell parts are the exception — they need a toolkit that knows their compute
+capability, so use §1b even though the driver would accept cu12 wheels.
+
+Common to both: clone the fork, and remember the env is **not** portable (compiled CUDA wheels) —
+it must be built on each machine. Only the weight cache (§2) is copyable.
+
+```bash
+# origin = the working version; upstream = jwohlwend/boltz
 git clone https://github.com/kouroshSA/boltz.git
 cd boltz
+```
 
+### 1a. x86_64 Linux + CUDA 12 driver (the default path)
+
+```bash
 # env — Python 3.10–3.12 (3.12 verified), needs a CUDA GPU
 conda create -n boltz python=3.12 -y
 conda activate boltz
 pip install -e ".[cuda]"        # torch + CUDA-12 wheels + cuequivariance ops (several GB)
-
-# sanity
-python -c "import torch; print('CUDA', torch.cuda.is_available(), torch.cuda.device_count())"
-boltz predict --help | head
 ```
-NOTE: the conda env is **not** portable (compiled CUDA wheels) — it must be installed on each machine.
-Only the weight cache (below) is copyable.
 
-### 1a. Blackwell / CUDA-13 boxes (e.g. DGX Spark GB10, sm_121) — do NOT use `[cuda]`
+### 1b. CUDA-13 / Blackwell / aarch64 boxes — do NOT use `[cuda]`
 
-The `[cuda]` extra pins `cuequivariance_ops_cu12*`, i.e. CUDA-12 wheels. On a Blackwell GPU whose
-driver stack is CUDA 13 they will not pair with a cu130 torch. Install torch and the equivariance
-ops from the CUDA-13 channels instead:
+The `[cuda]` extra pins `cuequivariance_ops_cu12*`, i.e. CUDA-12 wheels; they will not pair with the
+cu130 torch these GPUs need. Take torch and the equivariance ops from the CUDA-13 channels instead:
 
 ```bash
 conda create -n boltz -c conda-forge --override-channels python=3.12 -y   # conda-forge avoids the
@@ -37,16 +58,23 @@ pip install torch --index-url https://download.pytorch.org/whl/cu130
 pip install -e .                                                          # base deps, no [cuda] extra
 pip install "cuequivariance_ops_cu13>=0.5.0" "cuequivariance_ops_torch_cu13>=0.5.0" \
             "cuequivariance_torch>=0.5.0"
+```
+Verified on a DGX Spark (GB10, aarch64, sm_121): torch 2.13.0+cu130, cuequivariance 0.11.1.
 
-# sanity: the triangle kernel must actually run, not just import
+### 1c. Sanity checks (both paths)
+
+```bash
+python -c "import torch; print('CUDA', torch.cuda.is_available(), torch.cuda.device_count())"
+boltz predict --help | head
+
+# the triangle kernel must actually RUN, not just import — this is what catches a cu12/cu13 mismatch
 python -c "
 import torch; from cuequivariance_torch.primitives.triangle import triangle_multiplicative_update
 x=torch.randn(1,32,32,64,device='cuda',dtype=torch.bfloat16); m=torch.ones(1,32,32,device='cuda',dtype=torch.bool)
 print('kernel ok', triangle_multiplicative_update(x, direction='outgoing', mask=m).shape)"
 ```
-Verified on a DGX Spark (GB10, aarch64): torch 2.13.0+cu130, cuequivariance 0.11.1.
-On aarch64 always take `linux-aarch64`/`arm64` builds. If the kernels cannot be made to work at all,
-`boltz predict --no_kernels` falls back to the pure-torch path (slower).
+If the kernels cannot be made to work at all, `boltz predict --no_kernels` falls back to the
+pure-torch path (slower, but correct).
 
 ## 2. Locate / verify the weight cache BEFORE downloading
 
@@ -94,7 +122,8 @@ boltz predict monomer.fasta --use_msa_server --out_dir OUT --cache "$BOLTZ_CACHE
 #   complex.fasta:  >A|protein|\nSEQ_A  \n  >B|protein|\nSEQ_B    (homodimer = same seq twice)
 boltz predict complex.fasta --use_msa_server --diffusion_samples 5 --out_dir OUT --cache "$BOLTZ_CACHE"
 
-# batch across BOTH GPUs — put one FASTA per complex in an inputs/ dir (nothing else in it)
+# batch across GPUs (--devices = how many this machine has) — one FASTA per complex in an
+# inputs/ dir, nothing else in it
 boltz predict inputs --use_msa_server --devices 2 --diffusion_samples 5 \
       --max_parallel_samples 1 --out_dir OUT --cache "$BOLTZ_CACHE"
 ```

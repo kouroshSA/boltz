@@ -19,13 +19,17 @@ conda activate boltz                      # or use /home/ksa/anaconda3/envs/bolt
 export BOLTZ_CACHE=/home/ksa/Models/boltz_cache
 ```
 
-### DGX Spark (GB10) specifics
+### Per-machine differences
 
-- The env there is built from **conda-forge** with **cu130** torch and the **`cuequivariance_*_cu13`**
-  wheels — *not* `pip install -e ".[cuda]"`, whose cu12 pins don't pair with a CUDA-13 torch.
-  See `claude.code.instructions.md` §1a.
-- **Pass `--num_workers 0` to every `boltz predict` on that box** — see §5.
-- One GPU: `--devices 2` does not apply there.
+Same repo, same cache, same commands — only the install differs, and only in which CUDA build you
+take (`claude.code.instructions.md` §1 has the full matrix):
+
+- **x86_64 Linux + CUDA-12 driver** (Intel/AMD workstations and servers — the 2× RTX 3090 box, and
+  any A100/L40S/H100 node): the standard `pip install -e ".[cuda]"`. Nothing special.
+- **DGX Spark (GB10, aarch64, CUDA 13)**: built from **conda-forge** with **cu130** torch and the
+  **`cuequivariance_*_cu13`** wheels — *not* `[cuda]`, whose cu12 pins don't pair with a CUDA-13
+  torch. Also: **pass `--num_workers 0` to every `boltz predict`** there (see §5), and it has one
+  GPU, so `--devices 2` does not apply.
 
 > Keep prediction outputs **out of the repo** — write to `--out_dir /home/ksa/Models/boltz_runs/...`.
 > Never place the run log inside the input directory (Boltz tries to parse every file in it).
@@ -95,7 +99,7 @@ boltz predict /home/ksa/Models/boltz_runs/batch/inputs \
 | `--recycling_steps N` | 3 | More = slightly better, slower. |
 | `--sampling_steps N` | 200 | Diffusion steps. |
 | `--use_msa_server` | off | Generate MSAs via ColabFold server. Omit if providing your own MSA (`.a3m` in the header). |
-| `--num_workers N` | 2 | **Use `0` on the DGX Spark** — the forked dataloader workers hang there (see below). |
+| `--num_workers N` | 2 | Set `0` if a run stalls at `Predicting:` — **required on the DGX Spark** (see below). |
 | `--out_dir PATH` | ./ | Write **outside the repo** (`/home/ksa/Models/boltz_runs/...`). |
 | `--cache PATH` | `~/.boltz` | Point at `/home/ksa/Models/boltz_cache`. |
 | `--override` | off | Recompute even if outputs exist. |
