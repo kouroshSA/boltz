@@ -38,9 +38,9 @@ import numpy as np
 
 METRICS = ["ipTM", "pTM", "Ranking", "pLDDT", "PAE"]
 LOWER_BETTER = {"PAE"}
+LEGACY_COLS = ["Category", "N_Chains", "Total_Length"]  # dropped by default (see --keep-legacy-cols)
 COLS = (["Interaction"]
-        + [f"{s}_{m}" for m in METRICS for s in ("Best", "Avg", "SD", "High", "Low")]
-        + ["Category", "N_Chains", "Total_Length"])
+        + [f"{s}_{m}" for m in METRICS for s in ("Best", "Avg", "SD", "High", "Low")])
 # AF3 Category thresholds on Best_ipTM (derived from Ashish's labeled AF3 data)
 def category(best_iptm):
     if best_iptm <= 0.40: return "Very Weak/None"
@@ -100,6 +100,8 @@ def main():
     ap.add_argument("-o", "--out", required=True, help="output summary CSV path")
     ap.add_argument("--af3-name", action="store_true",
                     help="format Interaction as pair_NNNN_<name> (AF3 4-field convention)")
+    ap.add_argument("--keep-legacy-cols", action="store_true",
+                    help="also emit Category, N_Chains, Total_Length (dropped by default)")
     ap.add_argument("--per-pair-json", action="store_true",
                     help="also write an AF3-style <name>_summary_confidences.json next to each pair")
     a = ap.parse_args()
@@ -133,8 +135,9 @@ def main():
                   "category": row["Category"], "source": "boltz-2"}
             json.dump(js, open(os.path.join(d, f"{name}_summary_confidences.json"), "w"), indent=1)
 
+    cols = COLS + (LEGACY_COLS if a.keep_legacy_cols else [])
     with open(a.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader(); w.writerows(rows)
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); w.writeheader(); w.writerows(rows)
     n_samp = len(collect_samples(*pairs[0])[0]["ipTM"])
     print(f"WROTE {a.out}: {len(rows)} complexes, {n_samp} sample(s) each")
     print("Category counts:", {c: sum(1 for r in rows if r['Category'] == c) for c in

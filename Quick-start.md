@@ -132,15 +132,17 @@ why running `--diffusion_samples 5` (look at the max and the spread) is recommen
 ## 7. AF3-style interaction summary (adapter)
 
 Convert Boltz outputs (best with `--diffusion_samples 5`) into the same per-pair summary schema as the
-AlphaFold-3 `*_interaction_summary` CSV (Best/Avg/SD/High/Low for ipTM, pTM, Ranking, pLDDT, PAE +
-Category/N_Chains/Total_Length), so Boltz results drop into the AF3 comparison pipeline:
+AlphaFold-3 `*_interaction_summary` CSV (Best/Avg/SD/High/Low for ipTM, pTM, Ranking, pLDDT, PAE), so
+Boltz results drop into the AF3 comparison pipeline:
 
 ```bash
 python tools/boltz_to_af3_summary.py <boltz_out_dir> [more_dirs...] -o summary.csv \
-       [--af3-name] [--per-pair-json]
+       [--af3-name] [--per-pair-json] [--keep-legacy-cols]
 ```
 - `<boltz_out_dir>` = any parent containing Boltz `predictions/<name>/` (single run or batch).
 - `--af3-name` formats `Interaction` as `pair_NNNN_<name>` (AF3's 4-field convention).
+- The `Category`, `N_Chains`, `Total_Length` columns are **dropped by default** (they are removed
+  before XGBoost anyway); pass `--keep-legacy-cols` to include them.
 - Category (from Best_ipTM, thresholds derived from the lab's AF3 run): ≤0.40 Very Weak/None,
   ≤0.60 Weak, ≤0.80 Moderate, else Strong.
 - ipTM/pTM map exactly to AF3; pLDDT is scaled to 0–100; Ranking = Boltz `confidence_score`
