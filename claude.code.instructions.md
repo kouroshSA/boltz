@@ -162,7 +162,57 @@ python tools/boltz_to_af3_summary.py <boltz_out_dir> [more_dirs...] -o summary.c
 - Run the adapter with a matplotlib/pandas-capable Python if you also make figures; the adapter itself
   needs only numpy (+ the Boltz env's pandas).
 
-## 5. More
+## 5. Template-free predictions
+
+FASTA input (as used throughout this doc and `Quick-start.md`) has **no template mechanism at
+all** — templates are only possible via the YAML input format's optional `templates:` field
+(see `docs/prediction.md` §Templates). So as long as every input is a `.fasta` (never a YAML with
+a `templates:` block), every prediction is template-free by construction — there's no flag to set
+and no risk of some inputs picking up a template while others don't. This project's standard
+workflow (protein-pair complexes, `--diffusion_samples 5` to match AF3's 5 models) is always run
+this way.
+
+## 6. Known issue: GPU memory / OOM on large complexes
+
+**OOM does not crash a run.** Boltz's own prediction loop catches CUDA OOM per-batch, prints
+`| WARNING: ran out of memory, skipping batch`, and continues to the next input in the same
+process (`src/boltz/model/models/boltz2.py`, `except` around the diffusion/confidence forward
+passes). `tools/boltz_pipeline_run.py` adds a second layer of resilience on top (chunked
+subprocesses; a whole chunk dying for some other reason still lets the next chunk run). Net effect:
+a batch of many complexes is safe to launch unattended — anything too large for the GPU is simply
+skipped (no output written for that pair), never fatal.
+
+**Combined sequence length is only a rough proxy for memory use — not reliable on its own.**
+Calibrated 2026-09-07 on 2× RTX 3090 (24 GB each), Boltz-2, defaults (`--diffusion_samples 5
+--max_parallel_samples 1`, `--recycling_steps 3`, `--num_subsampled_msa 1024`), one pair at a time,
+alone on an otherwise-idle GPU (so these are *best-case* per-pair numbers — running several
+complexes concurrently on the same GPU, or via `--devices N` data-parallel batching, uses more
+memory per stream and will OOM at *shorter* lengths than shown here):
+
+| Total residues (both chains) | Result |
+|---|---|
+| 400, 412, 500, 600, 700 | OK |
+| **801** | **OOM** |
+| 899 | OK |
+| 951 | OOM |
+
+The 801-fails-but-899-succeeds result is **non-monotonic in length** — total residue count alone
+does not reliably predict whether a pair will fit. The most likely driver is MSA depth (number of
+homologs the public ColabFold server returns), which varies per protein independent of its length
+and isn't cheap to know in advance without actually querying the server. Treat any length-based
+cutoff as a *conservative triage heuristic* to reduce wasted OOM attempts on a smaller-VRAM machine,
+not a guarantee — and don't be surprised if a handful of below-cutoff pairs still OOM, or a few
+above-cutoff ones would have fit.
+
+**Practical cutoff in use for this project:** on 24 GB cards, pairs with combined length **> 700
+residues** are routed to a larger-memory machine (e.g. a DGX Spark, 128 GB unified memory) rather
+than attempted locally, since 700 is the highest confirmed-OK point from calibration and 801 already
+failed. Pairs ≤ 700 residues run locally via `tools/boltz_pipeline_run.py`. Because OOM is
+non-fatal, treat any locally-run pair that comes back with no `confidence_*_model_0.json` as a
+failure to re-run on the larger machine — the pre-split is a throughput optimization (so two
+machines can work in parallel), not a substitute for checking actual output.
+
+## 7. More
 
 See `Quick-start.md` in this repo for worked examples and a flags table. To pull upstream Boltz
 updates: `git fetch upstream && git merge upstream/main`. Push your changes to the fork: `git push origin`.
